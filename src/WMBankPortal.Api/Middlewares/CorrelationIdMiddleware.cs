@@ -1,0 +1,32 @@
+using Serilog.Context;
+
+namespace WMBankPortal.Api.Middlewares;
+
+/// <summary>
+/// Ensures every request has a unique correlation identifier for end-to-end distributed tracing.
+/// Pushes CorrelationId into the Serilog diagnostic context.
+/// </summary>
+public sealed class CorrelationIdMiddleware
+{
+    public const string CorrelationIdHeader = "X-Correlation-ID";
+    private readonly RequestDelegate _next;
+
+    public CorrelationIdMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        string correlationId = context.Request.Headers[CorrelationIdHeader].FirstOrDefault()
+            ?? Guid.NewGuid().ToString("N");
+
+        context.Items[CorrelationIdHeader] = correlationId;
+        context.Response.Headers[CorrelationIdHeader] = correlationId;
+
+        using (LogContext.PushProperty("CorrelationId", correlationId))
+        {
+            await _next(context);
+        }
+    }
+}

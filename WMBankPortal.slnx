@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WMBankPortal.Api/WMBankPortal.Api.csproj" />
+    <Project Path="src/WMBankPortal.Application/WMBankPortal.Application.csproj" />
+    <Project Path="src/WMBankPortal.Domain/WMBankPortal.Domain.csproj" />
+    <Project Path="src/WMBankPortal.Infrastructure/WMBankPortal.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WMBankPortal.IntegrationTests/WMBankPortal.IntegrationTests.csproj" />
+    <Project Path="tests/WMBankPortal.UnitTests/WMBankPortal.UnitTests.csproj" />
+  </Folder>
+</Solution>
