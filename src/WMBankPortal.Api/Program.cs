@@ -99,12 +99,12 @@ try
     // 1. Global Exception Handler (RFC 7807 ProblemDetails; never leaks stack traces)
     app.UseMiddleware<GlobalExceptionMiddleware>();
 
-    // 2. HTTPS Redirection & HSTS in non-development
+    // 2. HTTPS Redirection & HSTS in non-development (avoids warning when running local HTTP profile)
     if (!app.Environment.IsDevelopment())
     {
         app.UseHsts();
+        app.UseHttpsRedirection();
     }
-    app.UseHttpsRedirection();
 
     // 3. Security Headers (CSP, X-Frame-Options, X-Content-Type-Options)
     app.UseMiddleware<SecurityHeadersMiddleware>();
@@ -141,6 +141,12 @@ try
     // 11. Endpoint mappings
     app.MapControllers().RequireRateLimiting("api-limiter");
     app.MapHealthChecks("/health");
+
+    // Root redirect to Swagger UI in Development for instant developer feedback
+    if (app.Environment.IsDevelopment())
+    {
+        app.MapGet("/", () => Results.Redirect("/swagger"));
+    }
 
     Log.Information("WMBankPortal.Api initialized successfully.");
     app.Run();

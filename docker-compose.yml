@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -10,7 +8,8 @@ services:
       MSSQL_SA_PASSWORD: "Password123!Secure#Banking"
       MSSQL_PID: "Developer"
     ports:
-      - "1433:1433"
+      # Host port 14333 mapped to container port 1433 to avoid conflicts with existing local SQL Server instances
+      - "14333:1433"
     volumes:
       - sqlserver-data:/var/opt/mssql
     healthcheck:
