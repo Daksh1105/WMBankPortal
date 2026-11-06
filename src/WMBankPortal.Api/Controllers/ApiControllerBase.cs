@@ -28,7 +28,7 @@ public abstract class ApiControllerBase : ControllerBase
     /// <summary>
     /// Translates a generic domain Result{T} into an appropriate HTTP response.
     /// </summary>
-    protected ActionResult<T> HandleResult<T>(Result<T> result)
+    protected ActionResult HandleResult<T>(Result<T> result)
     {
         if (result.IsSuccess)
         {

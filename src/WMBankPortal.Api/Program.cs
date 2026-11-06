@@ -1,11 +1,20 @@
+using System.Text;
 using System.Threading.RateLimiting;
+using FluentValidation;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Serilog;
 using WMBankPortal.Api.Middlewares;
 using WMBankPortal.Api.Services;
 using WMBankPortal.Application.Common.Interfaces;
+using WMBankPortal.Application.Features.Auth.Validators;
 using WMBankPortal.Infrastructure.Common;
+using WMBankPortal.Infrastructure.Identity;
+using WMBankPortal.Infrastructure.Persistence;
 
 // 1. Initialize bootstrap Serilog logger
 Log.Logger = new LoggerConfiguration()
@@ -26,19 +35,100 @@ try
         .Enrich.FromLogContext()
         .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {Message:lj}{NewLine}{Exception}"));
 
-    // 3. Register Core Services
+    // 3. Database & EF Core Configuration
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+        ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
+
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseSqlServer(connectionString, sql =>
+            sql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName)));
+
+    builder.Services.AddScoped<IAppDbContext>(sp => sp.GetRequiredService<AppDbContext>());
+
+    // 4. ASP.NET Core Identity Configuration
+    builder.Services.AddIdentity<ApplicationUser, ApplicationRole>(options =>
+    {
+        // Strict Banking Password Policy
+        options.Password.RequireDigit = true;
+        options.Password.RequireLowercase = true;
+        options.Password.RequireUppercase = true;
+        options.Password.RequireNonAlphanumeric = true;
+        options.Password.RequiredLength = 10;
+
+        // Account Lockout Policy (5 failed attempts = 15-minute lockout)
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.AllowedForNewUsers = true;
+
+        // User Policy
+        options.User.RequireUniqueEmail = true;
+    })
+    .AddEntityFrameworkStores<AppDbContext>()
+    .AddDefaultTokenProviders();
+
+    // 5. JWT Authentication Configuration
+    builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
+    var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
+        ?? throw new InvalidOperationException("JwtSettings section is missing from configuration.");
+
+    var tokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = jwtSettings.Issuer,
+        ValidateAudience = true,
+        ValidAudience = jwtSettings.Audience,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Secret)),
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
+
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.SaveToken = true;
+        options.TokenValidationParameters = tokenValidationParameters;
+
+        // Handle WebSocket Query String Token Authentication for SignalR Hubs
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+    builder.Services.AddAuthorization();
+
+    // 6. Register Application & Infrastructure Services
     builder.Services.AddControllers();
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddHttpContextAccessor();
 
-    // Register Common Infrastructure / Application contracts
     builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
     builder.Services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
+    builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+    builder.Services.AddScoped<IAuthService, AuthService>();
 
-    // 4. Register Health Checks
+    // Register FluentValidation Validators
+    builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>();
+
+    // 7. Register Health Checks
     builder.Services.AddHealthChecks();
 
-    // 5. Configure Swagger (Enabled strictly in Development)
+    // 8. Configure Swagger UI (Enabled strictly in Development)
     if (builder.Environment.IsDevelopment())
     {
         builder.Services.AddSwaggerGen(c =>
@@ -52,7 +142,7 @@ try
         });
     }
 
-    // 6. Configure CORS
+    // 9. Configure CORS
     var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
         ?? ["http://localhost:5173", "https://localhost:5173"];
 
@@ -67,12 +157,12 @@ try
         });
     });
 
-    // 7. Configure Rate Limiting (Phase 0 Baseline)
+    // 10. Configure Rate Limiting
     builder.Services.AddRateLimiter(options =>
     {
         options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-        // General sliding window rate limiter for all standard API calls
+        // General sliding window rate limiter
         options.AddSlidingWindowLimiter("api-limiter", opt =>
         {
             opt.PermitLimit = 100;
@@ -96,10 +186,10 @@ try
     // STRICT MIDDLEWARE PIPELINE ORDER (Per Enterprise Banking Architecture)
     // =========================================================================
 
-    // 1. Global Exception Handler (RFC 7807 ProblemDetails; never leaks stack traces)
+    // 1. Global Exception Handler (RFC 7807 ProblemDetails)
     app.UseMiddleware<GlobalExceptionMiddleware>();
 
-    // 2. HTTPS Redirection & HSTS in non-development (avoids warning when running local HTTP profile)
+    // 2. HTTPS Redirection & HSTS in non-development
     if (!app.Environment.IsDevelopment())
     {
         app.UseHsts();
@@ -118,10 +208,10 @@ try
     // 6. Routing
     app.UseRouting();
 
-    // 7. Authentication (Placeholder - wired fully in Phase 1 with Identity & JWT)
+    // 7. Authentication (Validates JWT Token from Authorization header or WebSocket query)
     app.UseAuthentication();
 
-    // 8. Authorization
+    // 8. Authorization (Enforces RBAC policies)
     app.UseAuthorization();
 
     // 9. Correlation ID and Request Tracing Middleware
@@ -148,8 +238,38 @@ try
         app.MapGet("/", () => Results.Redirect("/swagger"));
     }
 
+    // =========================================================================
+    // DEVELOPMENT DATABASE AUTOMIGRATION & SEEDING
+    // =========================================================================
+    if (app.Environment.IsDevelopment())
+    {
+        using var scope = app.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        try
+        {
+            var dbContext = services.GetRequiredService<AppDbContext>();
+            Log.Information("Applying EF Core database migrations to SQL Server...");
+            await dbContext.Database.MigrateAsync();
+            Log.Information("Database migrations applied successfully.");
+
+            var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
+            var roleManager = services.GetRequiredService<RoleManager<ApplicationRole>>();
+            await DatabaseSeeder.SeedDevelopmentDataAsync(userManager, roleManager, app.Configuration, app.Logger);
+            Log.Information("Development demo users seeded successfully.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "An error occurred during database migration or demo data seeding.");
+        }
+    }
+
     Log.Information("WMBankPortal.Api initialized successfully.");
     app.Run();
+}
+catch (HostAbortedException)
+{
+    // Required for EF Core design-time tools (migrations)
+    throw;
 }
 catch (Exception ex)
 {
@@ -161,4 +281,3 @@ finally
 }
 
 public partial class Program { }
-

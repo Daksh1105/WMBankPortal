@@ -48,3 +48,40 @@ This living document contains real technical viva questions, expected architectu
     1. *Returning raw stack traces or internal exception details is an information disclosure vulnerability (OWASP A01/A05) that reveals database schemas and library versions to attackers.*
     2. *ProblemDetails provides a consistent, machine-readable schema for frontends and API consumers to handle validation errors, concurrency conflicts, and state transition errors uniformly.*
     3. *It allows us to inject operational metadata like `correlationId` into the error response so clients can quote the exact tracking ID to customer support without exposing internal diagnostic logs."*
+
+---
+
+## Phase 1 Viva Questions (Authentication & Token Security)
+
+### Q6: Why do we store only the SHA-256 hash of a refresh token in the database rather than the raw token string?
+* **Candidate Answer:**
+  * *"A refresh token is a high-privilege bearer credential with a long lifetime (e.g. 7 days) that can mint new access tokens on demand. If stored in plaintext, any database breach, unencrypted backup, read replica leak, or SQL injection vulnerability would compromise every active session across the entire customer base.*
+  * *By hashing the token with SHA-256 before writing it to SQL Server, we guarantee that the database stores only one-way cryptographic digests. When the client sends the cookie, our service hashes the incoming token on the fly and queries the hash.*
+  * *Even if an adversary dumps the entire `RefreshTokens` table, they cannot reverse the SHA-256 hashes back into raw tokens to authenticate against the API."*
+
+---
+
+### Q7: How does token rotation coupled with Token Family Tracking detect token compromise and protect the user?
+* **Candidate Answer:**
+  * *"In token rotation, each refresh token is single-use. When exchanged at `/refresh`, the old token is marked revoked and replaced with a new one.*
+  * *We link all tokens issued during an active session under a single `FamilyId`. If an attacker intercepts a refresh token and tries to use it after the legitimate user has already refreshed, the server encounters an already-revoked token.*
+  * *This is a cryptographic smoking gun indicating token cloning or a replay attack. The server immediately queries all active tokens sharing that `FamilyId` and revokes them in a single transaction. This invalidates both the attacker's and the legitimate user's session instantly, preventing further unauthorized access and forcing re-authentication."*
+
+---
+
+### Q8: Why did you place `ApplicationUser` inside `WMBankPortal.Infrastructure` rather than `WMBankPortal.Domain`?
+* **Candidate Answer:**
+  * *"In Clean Architecture, the `Domain` layer must be pure and free of external framework dependencies. `ApplicationUser` inherits from `IdentityUser<Guid>`, which is part of Microsoft's `Microsoft.AspNetCore.Identity.EntityFrameworkCore` package.*
+  * *If `ApplicationUser` lived in `Domain`, the entire domain would take a transitive dependency on ASP.NET Core and EF Core, violating the Dependency Inversion Principle.*
+  * *Instead, the `Domain` layer represents users strictly by their fundamental identifier (`Guid UserId`). The `Infrastructure` layer manages the Identity implementation, while the `Application` layer defines abstractions like `IAuthService` and `IAppDbContext`."*
+
+---
+
+### Q9: How do you protect against user enumeration and timing attacks during the login process?
+* **Candidate Answer:**
+  * *"User enumeration occurs when an API reveals whether an email exists in the system (e.g., returning 'Email not registered' vs 'Incorrect password'). Attackers use this to harvest valid customer emails.*
+  * *In our `AuthService`:*
+    1. *We return the exact same generic error message (`Invalid email or password`) whether the user was not found, the password was wrong, or the account is locked out.*
+    2. *We always run password verification logic (or a dummy hash calculation) so response times are indistinguishable, preventing attackers from inferring valid accounts through timing discrepancies.*
+    3. *We enforce account lockout after 5 consecutive failed attempts, preventing automated dictionary and brute-force attacks."*
+

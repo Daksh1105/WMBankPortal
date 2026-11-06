@@ -61,10 +61,70 @@ Welcome to your cumulative learning log! This document records the core concepts
 
 ---
 
-### 4. Next Step: Phase 1 Preview
-In Phase 1, we will configure:
-* ASP.NET Identity with real SQL Server tables (`AspNetUsers`, `AspNetRoles`).
-* Refresh token hashing with token family reuse detection.
-* Account lockout rules (5 failed attempts = 15-minute lock).
-* In-memory access token handling on the React frontend.
-* Integration test suite testing token issuance and rate limiting.
+### 4. Next Step: Phase 1 Preview (Completed)
+In Phase 1, we configured ASP.NET Identity, refresh token family rotation, account lockout, and frontend auth state.
+
+---
+
+## Phase 1: Authentication, ASP.NET Core Identity & Token Security
+
+### 1. What We Built
+* **ASP.NET Core Identity with Guid Keys**: Extended `IdentityUser<Guid>` and `IdentityRole<Guid>` strictly inside `Infrastructure/Identity`, preserving Clean Architecture boundaries so `Domain` has zero identity framework dependencies.
+* **Cryptographically Hashed Refresh Tokens**: Domain entity `RefreshToken` with raw tokens generated via `RandomNumberGenerator`, hashed with SHA-256 before storage in SQL Server.
+* **Token Family Tracking & Compromise Detection**: Each login session creates a `FamilyId`. If an already-rotated or revoked token is replayed (indicating credential theft), all active tokens across that entire family are instantly revoked.
+* **Lockout Protection**: Configured 5 failed login attempts resulting in an automatic 15-minute lockout via ASP.NET Core Identity's `UserManager.AccessFailedAsync`.
+* **Cookie-Based Security**: Refresh tokens are issued exclusively via `HttpOnly`, `SameSite=Strict`, `Secure` cookies scoped to `/api/v1/auth`.
+* **Silent Concurrent Refresh in React**: Frontend `apiClient` Axios interceptor catches `401 Unauthorized`, queues simultaneous outgoing requests, silently requests a new JWT via `/api/v1/auth/refresh`, and replays queued requests without user disruption.
+* **Automated Database Migration & Demo Seeding**: `AppDbContext` automatically applies pending migrations and seeds 4 role accounts (`customer`, `officer`, `agent`, `admin`) on development startup.
+* **Unit & Integration Test Coverage**: Added tests for FluentValidation rules, `RefreshToken` domain logic, registration, login, account lockout after 5 attempts, and cookie rotation.
+
+---
+
+### 2. Deep-Dive Concepts & Real-World Analogies
+
+#### A. Storing Hashes Instead of Plaintext Tokens
+* **The Concept:** A refresh token is a bearer credential equivalent in power to a password for the duration of its lifespan (e.g. 7 days). If an attacker manages to obtain a database dump or read replica backup through SQL injection or insider threat, having plaintext refresh tokens allows them to impersonate every active user on the banking portal.
+* **The Solution:** We generate a high-entropy 64-character cryptographic token (`RandomNumberGenerator.GetBytes(64)`), compute its SHA-256 hash, and store *only the hash* in the database. When the client sends back the raw token cookie, we hash it on the fly and look up the hash. If the database is compromised, the attacker only gets irreversible hashes.
+* **The Analogy:** Think of a **high-end hotel coat check**. The attendant gives you a numbered claim ticket. In the logbook behind the counter, the hotel writes down a secret barcode that can only be matched by scanning your physical ticket. If a thief breaks in and steals the logbook, they cannot produce a counterfeit claim ticket to steal your coat.
+
+#### B. Refresh Token Rotation & Token Family Reuse Detection
+* **The Concept:** Token rotation means that every time a refresh token is used to obtain a new access token, the old refresh token is marked as `Revoked` and replaced with a newly generated refresh token.
+* **What Happens During a Replay Attack?**
+  1. An attacker intercepts Refresh Token #1 from a user.
+  2. The legitimate user's browser uses Refresh Token #1 to get Refresh Token #2. Refresh Token #1 is now revoked.
+  3. The attacker later attempts to present Refresh Token #1 to the `/refresh` endpoint.
+  4. The system detects that Refresh Token #1 has *already been revoked*. This is an unambiguous signal that a token has been cloned or leaked!
+  5. The server looks up the `FamilyId` of the token and **instantly revokes all tokens** belonging to that family, terminating the attacker's and the user's active session and forcing re-authentication.
+* **The Analogy:** Think of a **relay race baton**. When Runner A hands the baton to Runner B, Baton A is destroyed. If someone suddenly shows up at the finish line carrying Baton A, the race marshals know someone stole a discarded baton. The entire team is immediately disqualified.
+
+#### C. Account Lockout Mechanics & Timing Attack Prevention
+* **The Concept:** Automated bots attempt brute-force dictionary attacks against banking login endpoints. Without lockout protection, a distributed botnet can test thousands of passwords per second.
+* **The Implementation:** We enable Identity's `DefaultLockoutTimeSpan = 15 minutes` and `MaxFailedAccessAttempts = 5`. Furthermore, when a login fails due to an invalid password or non-existent user, we return an identical generic error message (`Invalid credentials or account locked`) to prevent **user enumeration** (where an attacker probes to see which emails are registered).
+
+#### D. Frontend Silent Concurrent Refresh Queue
+* **The Concept:** In modern SPAs, a page load might trigger 5 API calls in parallel (e.g. `getProfile`, `getApplications`, `getNotifications`, `getAccounts`, `getTickets`). If the access token has expired, all 5 requests fail with `401 Unauthorized` simultaneously.
+* **The Problem:** If the frontend blindly attempts to refresh for each 401, 5 concurrent `/refresh` requests hit the backend. Due to token rotation, only the first request succeeds; the other 4 will trigger token reuse detection and lock the user out!
+* **The Solution:** We implement a **promise queue** in `frontend/src/api/client.ts`. The first 401 sets `isRefreshing = true` and fires a single `/refresh` request. The remaining 4 requests are placed into a pending promise queue. Once the refresh completes, the queue is resolved with the new access token, and all original requests are replayed seamlessly.
+
+---
+
+### 3. Jargon Buster (Terms You Must Know)
+
+| Jargon | Plain-English Definition |
+| :--- | :--- |
+| **PBKDF2 / Argon2** | Cryptographic key derivation functions that use salt, iterations, and memory-hardness to hash passwords so they cannot be cracked with GPU rainbow tables. |
+| **ClaimsPrincipal** | The .NET runtime object representing the authenticated user, containing claims (Subject `sub`, Email, Roles, etc.) extracted from the decrypted JWT payload. |
+| **Token Rotation** | The practice of issuing a brand-new refresh token every time one is exchanged, invalidating the previous one. |
+| **Token Family** | A lineage identifier (`FamilyId`) linking all refresh tokens issued within a single authenticated session across consecutive rotations. |
+| **SameSite=Strict** | A browser cookie attribute instructing the browser never to include the cookie in cross-site requests, completely preventing Cross-Site Request Forgery (CSRF). |
+| **HttpOnly Flag** | A browser cookie attribute preventing client-side JavaScript (`document.cookie`) from reading or modifying the cookie, neutralizing XSS credential theft. |
+
+---
+
+### 4. Next Step: Phase 2 Preview
+In Phase 2, we will configure:
+* **Customer Profile Management**: 1:1 relationship with `AspNetUsers`, personal information, address, and demographics.
+* **Banking Product Catalog**: Predefined financial products (Savings, Credit Card, Personal Loan, Fixed Deposit) with configurable dynamic JSON schemas.
+* **Dynamic Product Applications**: Strongly-typed `BankingApplication` entity with concurrency `RowVersion`, collision-safe `ApplicationNumber` generation (`APP-yyyyMMdd-XXXXXXXX`), and dynamic form response validation.
+* **Resource-Based Authorization**: Ensuring customers can only query and manipulate their own applications (IDOR defense).
+* **React Dynamic Form Engine**: Dynamically rendering UI form controls based on the product's JSON schema with client-side validation.
