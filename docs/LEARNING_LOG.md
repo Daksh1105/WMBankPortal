@@ -121,10 +121,61 @@ In Phase 1, we configured ASP.NET Identity, refresh token family rotation, accou
 
 ---
 
-### 4. Next Step: Phase 2 Preview
-In Phase 2, we will configure:
-* **Customer Profile Management**: 1:1 relationship with `AspNetUsers`, personal information, address, and demographics.
-* **Banking Product Catalog**: Predefined financial products (Savings, Credit Card, Personal Loan, Fixed Deposit) with configurable dynamic JSON schemas.
-* **Dynamic Product Applications**: Strongly-typed `BankingApplication` entity with concurrency `RowVersion`, collision-safe `ApplicationNumber` generation (`APP-yyyyMMdd-XXXXXXXX`), and dynamic form response validation.
-* **Resource-Based Authorization**: Ensuring customers can only query and manipulate their own applications (IDOR defense).
-* **React Dynamic Form Engine**: Dynamically rendering UI form controls based on the product's JSON schema with client-side validation.
+### 4. Next Step: Phase 2 Preview (Completed)
+In Phase 2, we built Customer Profile management, Banking Products catalog with dynamic JSON schemas, strongly-typed Banking Applications with state transitions and IDOR protection, and a schema-driven React form generator.
+
+---
+
+## Phase 2: Profile & Dynamic Product Applications
+
+### 1. What We Built
+* **Customer Profile Entity & Endpoints**: 1:1 relationship with `AspNetUsers` storing demographics, phone, birth date, and address. Validates minimum customer age of 18 via FluentValidation.
+* **Predefined Banking Products with JSON Schemas**: Seeded four wealth products (`SAV-01`, `CC-PLAT`, `LOAN-PERS`, `FD-GROWTH`) with configurable dynamic form schemas stored as `nvarchar(max)` in SQL Server.
+* **Banking Application State Machine**: Implements `Submitted -> UnderReview -> KycPending -> Approved/Rejected/Withdrawn` domain transitions with `InvalidStateTransitionException` enforcement.
+* **Collision-Safe Application Number Generation**: Produces human-readable IDs (`APP-yyyyMMdd-XXXXXXXX`) with an automatic 3-attempt database collision retry loop.
+* **Optimistic Concurrency Control**: Entity configuration includes `RowVersion` (`byte[]`) mapped with `.IsRowVersion()` to prevent lost updates during concurrent underwriting decisions.
+* **IDOR Defense (Insecure Direct Object Reference)**: Strict customer boundary verification in the service layer (`ApplicationService`). Customer B attempting to view or withdraw Customer A's application receives HTTP 403 Forbidden.
+* **Dynamic React Form Engine**: Reads product JSON schemas dynamically on the frontend, rendering appropriate text, number, and select inputs with real-time range and requirement validation.
+* **Comprehensive Test Suite**: Added 15 new unit tests (state machine & validators) and 3 new end-to-end integration tests (including automated IDOR attack verification). All 50 tests pass.
+
+---
+
+### 2. Deep-Dive Concepts & Real-World Analogies
+
+#### A. Insecure Direct Object References (IDOR) & Defense in Depth
+* **The Concept:** IDOR occurs when an application exposes a reference to an internal database object (such as `/api/v1/applications/1234`) and fails to verify that the authenticated caller actually owns that object.
+* **The Threat:** Without ownership checks, an attacker who registers an account can simply increment integer IDs or guess GUIDs to view financial details, bank balances, or loan applications of other customers.
+* **How We Defend Against It:**
+  1. High-entropy random GUID primary keys (no sequential integer enumeration).
+  2. The service layer inspects `ClaimsPrincipal` (`User.GetUserId()`) and cross-references it with `application.CustomerId`. If they do not match, the system rejects the call with **HTTP 403 Forbidden**.
+  3. Role-based bypass is strictly limited to authorized internal roles (`Officer`, `Admin`).
+
+#### B. Dynamic Schema-Driven Forms in Banking
+* **The Concept:** Different banking products require drastically different application data (e.g. Credit Cards require employer name and annual income, while Fixed Deposits require tenure and interest payout frequency).
+* **The Solution:** Rather than altering database tables every time a new banking product is launched, each product stores its form requirements as a JSON schema. The frontend dynamically parses this schema and renders the UI inputs on the fly, storing the validated response in `FormValuesJson`.
+* **The Analogy:** Think of a **tax form template**. Rather than building a brand new physical building for every tax form type, the government creates a standardized PDF template with blank boxes. The taxpayer fills in the boxes, and the system archives the completed form.
+
+#### C. Optimistic Concurrency Control (`RowVersion`)
+* **The Concept:** In a busy underwriting team, two loan officers might open the same application at 10:00 AM. Officer A approves it at 10:01 AM. Officer B rejects it at 10:02 AM. Without concurrency control, Officer B's rejection silently overwrites Officer A's approval without anyone realizing a conflict occurred.
+* **The Solution:** We assign a SQL Server `rowversion` column to the application. EF Core checks that the `RowVersion` matches during `SaveChangesAsync()`. If another user modified the row in the interim, EF Core throws a `DbUpdateConcurrencyException`, returning HTTP 409 Conflict.
+
+---
+
+### 3. Jargon Buster (Terms You Must Know)
+
+| Jargon | Plain-English Definition |
+| :--- | :--- |
+| **IDOR (Insecure Direct Object Reference)** | An access control vulnerability where a client accesses an object using a direct identifier without server-side authorization validation. |
+| **Optimistic Concurrency** | A concurrency control pattern that assumes conflicts are rare; records are read without locks, but modifications verify that no other process modified the record since it was read. |
+| **State Machine** | A mathematical model of computation consisting of a set of states, an initial state, and transitions between states triggered by specific events. |
+| **Dynamic Form Schema** | A declarative metadata structure (typically JSON) that instructs a client UI how to render, label, and validate user input fields at runtime. |
+| **Terminal State** | A state in a state machine from which no further transitions are permitted (e.g. `Approved`, `Rejected`, `Withdrawn`). |
+
+---
+
+### 4. Next Step: Phase 3 Preview
+In Phase 3, we will configure:
+* **KYC Document Upload Pipeline**: Multipart file uploads for ID Proof, Address Proof, and Photo.
+* **File Ingestion Security**: Magic byte header inspection, double-extension blocking, 5MB file limits, and EXIF stripping.
+* **Private Blob Storage**: Azurite local emulator with short-lived (5-minute) read-only SAS tokens for authorized document preview.
+* **IMalwareScanner Hook**: Clean architecture hook for antivirus and threat scanning.

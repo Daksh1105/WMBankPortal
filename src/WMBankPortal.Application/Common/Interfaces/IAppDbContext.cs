@@ -10,6 +10,10 @@ namespace WMBankPortal.Application.Common.Interfaces;
 public interface IAppDbContext
 {
     DbSet<RefreshToken> RefreshTokens { get; }
+    DbSet<CustomerProfile> CustomerProfiles { get; }
+    DbSet<BankingProduct> BankingProducts { get; }
+    DbSet<BankingApplication> BankingApplications { get; }
+    DbSet<ApplicationTimeline> ApplicationTimelines { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

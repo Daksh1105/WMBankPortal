@@ -85,3 +85,35 @@ This living document contains real technical viva questions, expected architectu
     2. *We always run password verification logic (or a dummy hash calculation) so response times are indistinguishable, preventing attackers from inferring valid accounts through timing discrepancies.*
     3. *We enforce account lockout after 5 consecutive failed attempts, preventing automated dictionary and brute-force attacks."*
 
+---
+
+## Phase 2 Viva Questions (Profile, Dynamic Applications & IDOR)
+
+### Q10: What is an Insecure Direct Object Reference (IDOR), and how is it prevented in your banking application endpoints?
+* **Candidate Answer:**
+  * *"An IDOR vulnerability occurs when an application exposes a database entity identifier directly in a URL (e.g., `GET /api/v1/applications/{id}`) and fails to verify that the requesting user has the right to access that specific entity.*
+  * *To prevent IDOR:*
+    1. *We use high-entropy random GUIDs rather than predictable auto-incrementing integers, stopping sequential ID harvesting.*
+    2. *In the service layer (`ApplicationService`), we inspect the authenticated caller's claims (`User.GetUserId()`) and match it directly against `application.CustomerId`.*
+    3. *If a customer attempts to query or manipulate another customer's application, we immediately return **HTTP 403 Forbidden**.*
+    4. *We test this rigorously in our integration test suite (`Phase2IntegrationTests.SubmitApplication_And_IdorProtection_EnforcesStrictCustomerBoundary`), proving that Customer B cannot view, inspect the timeline of, or withdraw Customer A's application."*
+
+---
+
+### Q11: Why did you model banking applications using a Domain State Machine rather than allowing unrestricted status updates?
+* **Candidate Answer:**
+  * *"Financial applications must adhere to strict regulatory underwriting lifecycles. Allowing arbitrary status changes (e.g., setting an application directly from `Submitted` to `Approved` without officer review) is a critical compliance violation.*
+  * *By implementing an explicit domain state machine:*
+    1. *All status transitions are governed by encapsulated methods on the `BankingApplication` entity (`Claim`, `RequestKyc`, `Approve`, `Reject`, `Withdraw`).*
+    2. *Illegal transitions throw an `InvalidStateTransitionException`, returning a clean HTTP 409 Conflict/422 Unprocessable Entity ProblemDetails response.*
+    3. *Every single valid transition automatically appends an immutable `ApplicationTimeline` entry recording the previous state, new state, user ID, role, and mandatory underwriting remarks, generating an audit trail."*
+
+---
+
+### Q12: How does your dynamic form schema architecture work, and why is it preferred over schema migrations for every product?
+* **Candidate Answer:**
+  * *"In a wealth management enterprise, new financial products (e.g., specialized ESG loans, credit card tiers, fixed deposits) are introduced frequently, each requiring distinct application inputs.*
+  * *Adding new relational columns to `BankingApplications` for every new product would create schema bloat, thousands of sparse NULL columns, and risky, frequent database schema migrations in production.*
+  * *Instead, each `BankingProduct` stores a JSON form schema (`nvarchar(max)`) defining required input types, labels, dropdown options, and validation bounds. The frontend dynamically generates the user interface from this schema, and the submitted response is stored in `FormValuesJson` alongside core indexed financial columns like `RequestedAmount` and `Status`."*
+
+

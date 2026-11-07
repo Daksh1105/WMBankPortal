@@ -12,6 +12,9 @@ using WMBankPortal.Api.Middlewares;
 using WMBankPortal.Api.Services;
 using WMBankPortal.Application.Common.Interfaces;
 using WMBankPortal.Application.Features.Auth.Validators;
+using WMBankPortal.Application.Features.Profile.Services;
+using WMBankPortal.Application.Features.Products.Services;
+using WMBankPortal.Application.Features.Applications.Services;
 using WMBankPortal.Infrastructure.Common;
 using WMBankPortal.Infrastructure.Identity;
 using WMBankPortal.Infrastructure.Persistence;
@@ -121,6 +124,9 @@ try
     builder.Services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
     builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
     builder.Services.AddScoped<IAuthService, AuthService>();
+    builder.Services.AddScoped<IProfileService, ProfileService>();
+    builder.Services.AddScoped<IProductService, ProductService>();
+    builder.Services.AddScoped<IApplicationService, ApplicationService>();
 
     // Register FluentValidation Validators
     builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>();
@@ -254,8 +260,8 @@ try
 
             var userManager = services.GetRequiredService<UserManager<ApplicationUser>>();
             var roleManager = services.GetRequiredService<RoleManager<ApplicationRole>>();
-            await DatabaseSeeder.SeedDevelopmentDataAsync(userManager, roleManager, app.Configuration, app.Logger);
-            Log.Information("Development demo users seeded successfully.");
+            await DatabaseSeeder.SeedDevelopmentDataAsync(dbContext, userManager, roleManager, app.Configuration, app.Logger);
+            Log.Information("Development demo users, profiles, and banking products seeded successfully.");
         }
         catch (Exception ex)
         {

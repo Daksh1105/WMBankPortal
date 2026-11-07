@@ -38,6 +38,17 @@ public abstract class ApiControllerBase : ControllerBase
         return MapErrorToResponse(result.Error);
     }
 
+    protected Guid GetCurrentUserId()
+    {
+        var claim = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return Guid.TryParse(claim, out var id) ? id : Guid.Empty;
+    }
+
+    protected string GetCurrentUserRole()
+    {
+        return User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value ?? string.Empty;
+    }
+
     private ActionResult MapErrorToResponse(Error error)
     {
         return error.Type switch
