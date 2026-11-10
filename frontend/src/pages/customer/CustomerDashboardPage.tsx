@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { apiClient } from '../../api/client'
 import type { CustomerDashboard, BankingApplication, ApplicationTimeline } from '../../types/banking'
+import { KycDocumentManager } from '../../components/kyc/KycDocumentManager'
 import {
   FileText,
   Clock,
@@ -11,7 +12,8 @@ import {
   Loader2,
   X,
   Ban,
-  ArrowUpRight
+  ArrowUpRight,
+  FileCheck
 } from 'lucide-react'
 
 interface CustomerDashboardPageProps {
@@ -27,6 +29,9 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({ on
   const [selectedApp, setSelectedApp] = useState<BankingApplication | null>(null)
   const [timelines, setTimelines] = useState<ApplicationTimeline[]>([])
   const [loadingTimeline, setLoadingTimeline] = useState(false)
+
+  // KYC modal
+  const [kycApp, setKycApp] = useState<BankingApplication | null>(null)
 
   // Withdraw state
   const [withdrawingAppId, setWithdrawingAppId] = useState<string | null>(null)
@@ -227,8 +232,21 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({ on
                     </td>
                     <td className="px-6 py-4 text-right space-x-2">
                       <button
+                        onClick={() => setKycApp(app)}
+                        className={`inline-flex items-center px-2.5 py-1.5 text-xs font-semibold rounded-lg shadow-2xs transition-colors ${
+                          app.status === 'KycPending'
+                            ? 'bg-purple-600 text-white hover:bg-purple-700 animate-pulse'
+                            : 'text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100'
+                        }`}
+                        title="Upload / View KYC Documents"
+                      >
+                        <FileCheck className="w-3.5 h-3.5 mr-1" />
+                        KYC
+                      </button>
+
+                      <button
                         onClick={() => handleOpenTimeline(app)}
-                        className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded hover:bg-slate-50"
+                        className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
                         title="View Audit Timeline"
                       >
                         <History className="w-3.5 h-3.5 mr-1 text-slate-500" />
@@ -343,6 +361,37 @@ export const CustomerDashboardPage: React.FC<CustomerDashboardPageProps> = ({ on
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* KYC Documents Modal */}
+      {kycApp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full p-6 my-8">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-200 mb-6">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">KYC Verification Documents</h3>
+                <p className="text-xs text-slate-500">
+                  Application <span className="font-mono font-semibold text-blue-600">{kycApp.applicationNumber}</span> ({kycApp.productName})
+                </p>
+              </div>
+              <button
+                onClick={() => setKycApp(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <KycDocumentManager
+              applicationId={kycApp.id}
+              applicationNumber={kycApp.applicationNumber}
+              applicationStatus={kycApp.status}
+              onUploadComplete={() => {
+                fetchDashboard()
+              }}
+            />
           </div>
         </div>
       )}

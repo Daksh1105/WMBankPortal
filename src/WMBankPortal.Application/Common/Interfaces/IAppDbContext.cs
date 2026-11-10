@@ -14,6 +14,7 @@ public interface IAppDbContext
     DbSet<BankingProduct> BankingProducts { get; }
     DbSet<BankingApplication> BankingApplications { get; }
     DbSet<ApplicationTimeline> ApplicationTimelines { get; }
+    DbSet<KycDocument> KycDocuments { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 }

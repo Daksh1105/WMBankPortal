@@ -179,3 +179,74 @@ In Phase 3, we will configure:
 * **File Ingestion Security**: Magic byte header inspection, double-extension blocking, 5MB file limits, and EXIF stripping.
 * **Private Blob Storage**: Azurite local emulator with short-lived (5-minute) read-only SAS tokens for authorized document preview.
 * **IMalwareScanner Hook**: Clean architecture hook for antivirus and threat scanning.
+
+---
+
+## Phase 3: Secure KYC Document Upload Pipeline, Ingestion Security & Private Blob Storage
+
+### 1. What We Built
+* **Domain Model (`KycDocument`)**: Entity tracking uploaded customer documents (`IdProof`, `AddressProof`, `Photo`) with status (`Pending`, `Verified`, `Rejected`), `ScanStatus`, `Sha256Hash`, versioning, and soft-delete support.
+* **File Ingestion Validator (`KycFileValidator`)**: High-performance stream validator enforcing:
+  - 5MB maximum file size limit.
+  - Double-extension blocking (e.g. `passport.pdf.exe`).
+  - File extension whitelisting (`.pdf`, `.jpg`, `.jpeg`, `.png`).
+  - Magic byte binary inspection (`%PDF` [0x25, 0x50, 0x44, 0x46], JPEG [0xFF, 0xD8, 0xFF], PNG [0x89, 0x50, 0x4E, 0x47]).
+* **Private Blob Storage Service (`AzureBlobStorageService`)**:
+  - Connects to Azurite local emulator (or Azure Blob Storage in cloud).
+  - Private container `kyc-documents` with zero anonymous public access.
+  - Short-lived (5-minute) read-only Shared Access Signature (SAS) token generation.
+  - Unguessable blob naming using raw 32-character hex GUIDs (`{guid}{ext}`).
+  - Transparent local disk fallback (`LocalKycStorage/`) if Azurite is offline.
+* **Malware Scanner Hook (`IMalwareScanner`)**: Extensible security pipeline hook with default `NoOpMalwareScanner` inspecting incoming streams for the industry-standard EICAR antivirus test signature.
+* **Automatic Workflow State Transition**: When an application is in `KycPending` and the customer re-uploads a requested document, the application automatically transitions back to `UnderReview` (`application.ResubmitKyc()`).
+* **Frontend KYC Document Manager (`KycDocumentManager.tsx`)**:
+  - Dedicated 3-slot UI for ID Proof, Address Proof, and Photo.
+  - Real-time client-side size (5MB) and type validation.
+  - Secure SAS token link preview and inline status chips (`Pending`, `Verified`, `Rejected`).
+  - Integrated into `CustomerDashboardPage.tsx` via an interactive modal with pulsing prompt for applications requiring KYC attention.
+
+---
+
+### 2. Deep-Dive Concepts & Real-World Analogies
+
+#### A. Magic Bytes vs. File Extension Spoofing
+* **The Concept:** Operating systems and web browsers often look at file extensions (`.pdf`, `.png`) to decide how to handle a file. However, an attacker can trivially rename an executable or shell script (`exploit.exe`) to `my_passport.pdf` and upload it. If a server relies solely on the filename or the client-supplied `Content-Type` header, it may store or execute malicious payloads.
+* **The Solution:** True file types are defined by the first few bytes of the file binary, known as **Magic Bytes** or the file signature.
+  - PDF files always start with ASCII `%PDF-` (`0x25, 0x50, 0x44, 0x46`).
+  - JPEG files always start with `0xFF, 0xD8, 0xFF`.
+  - PNG files always start with `0x89, 0x50, 0x4E, 0x47`.
+* **The Analogy:** Think of an **airport customs inspection**. A smuggler might stick an "Orange Juice" label on a bottle of acid. Checking the label (file extension) is useless. Customs officers perform a chemical dip test on the actual liquid (magic bytes) to verify its true molecular identity before allowing it into the terminal.
+
+#### B. Private Blob Storage & Short-Lived SAS Tokens
+* **The Concept:** Customer KYC documents contain highly sensitive Personally Identifiable Information (PII) such as passport numbers, national IDs, and residential addresses. Storing these in a publicly accessible cloud bucket (even with random URLs) is an egregious compliance violation under GDPR and RBI guidelines.
+* **The Solution:**
+  1. The storage container is completely **private**; no public read access is permitted.
+  2. The application never directly streams large files through Web API servers (which would tie up web server threads and memory).
+  3. Instead, when an authorized user (the customer or reviewing officer) requests to view a document, the server generates a **Shared Access Signature (SAS) URL** signed by the storage account key with **Read-only** permissions and an expiry of **5 minutes**.
+* **The Analogy:** Think of a **bank safe deposit box with a single-use visitor badge**. The bank doesn't put the safe on the sidewalk. When you prove your identity at the counter, the vault manager prints a magnetic card that grants you access to your specific box for exactly 5 minutes, after which the card demagnetizes and becomes useless.
+
+#### C. Immutable Audit Ledgers & EF Core Concurrency on Client-Generated GUIDs
+* **The Concept:** In financial domain models, audit logs (`ApplicationTimeline`) are append-only ledgers. They should never be edited or deleted.
+* **The Gotcha:** When entities use client-generated GUIDs (`Id = Guid.NewGuid()`), EF Core's change tracker sees a non-empty key on untracked child entities attached via navigation collections on already-tracked parent entities. If the collection was not loaded, EF Core infers the child's state as `EntityState.Modified` instead of `Added`, generating an `UPDATE` statement that affects 0 rows and throws a `DbUpdateConcurrencyException`.
+* **The Architectural Fix:** By overriding `SaveChangesAsync` in `AppDbContext`, we enforce that any `ApplicationTimeline` entry marked `Modified` is automatically redirected to `EntityState.Added`, while also cleanly stamping `UpdatedAtUtc = DateTime.UtcNow` on all modified domain entities.
+
+---
+
+### 3. Jargon Buster (Terms You Must Know)
+
+| Jargon | Plain-English Definition |
+| :--- | :--- |
+| **Magic Bytes (File Signature)** | The initial unique byte sequence in a file header that reliably identifies the actual binary file format regardless of its file extension. |
+| **SAS (Shared Access Signature)** | A URI query string parameter signed with a cloud storage key that grants time-limited, fine-grained access to a private storage resource. |
+| **EICAR Test String** | A standard 68-character benign test string developed by the European Institute for Computer Antivirus Research to safely test antivirus detection pipelines without actual malware. |
+| **Double-Extension Attack** | An evasion technique where an attacker names a file `document.pdf.exe` hoping misconfigured systems only inspect the middle extension (`.pdf`). |
+| **Unguessable Blob Path** | Storing files under a cryptographically generated GUID (e.g. `f47ac10b...pdf`) rather than user-supplied filenames to prevent path traversal and object enumeration. |
+| **Append-Only Ledger** | A data storage pattern where records can only be appended sequentially and cannot be modified or deleted, ensuring an immutable audit trail. |
+
+---
+
+### 4. Next Step: Phase 4 Preview
+In Phase 4, we will implement:
+* **SignalR Real-Time Notifications**: Hub at `/hubs/notifications` with query-string JWT access token handler.
+* **Notification Bell & Popups**: Real-time push updates to the customer and officer dashboards on application state changes.
+* **Mocked Email Service (`IEmailService`)**: Clean architectural email dispatch simulation for audit logging and outbox delivery.

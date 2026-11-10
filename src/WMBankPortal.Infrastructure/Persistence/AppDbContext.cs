@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using WMBankPortal.Application.Common.Interfaces;
+using WMBankPortal.Domain.Common;
 using WMBankPortal.Domain.Entities;
 using WMBankPortal.Infrastructure.Identity;
 
@@ -22,6 +23,7 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, Applicatio
     public DbSet<BankingProduct> BankingProducts => Set<BankingProduct>();
     public DbSet<BankingApplication> BankingApplications => Set<BankingApplication>();
     public DbSet<ApplicationTimeline> ApplicationTimelines => Set<ApplicationTimeline>();
+    public DbSet<KycDocument> KycDocuments => Set<KycDocument>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -151,5 +153,67 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, Applicatio
             b.HasIndex(x => x.ApplicationId);
             b.HasIndex(x => x.Timestamp);
         });
+
+        // Configure KycDocument entity
+        builder.Entity<KycDocument>(b =>
+        {
+            b.ToTable("KycDocuments");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.DocumentType).HasConversion<string>().HasMaxLength(32).IsRequired();
+            b.Property(x => x.OriginalFileName).HasMaxLength(255).IsRequired();
+            b.Property(x => x.StorageBlobPath).HasMaxLength(255).IsRequired();
+            b.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
+            b.Property(x => x.Status).HasConversion<string>().HasMaxLength(32).IsRequired();
+            b.Property(x => x.ScanStatus).HasConversion<string>().HasMaxLength(32).IsRequired();
+            b.Property(x => x.Sha256Hash).HasMaxLength(64).IsRequired();
+            b.Property(x => x.RejectionReason).HasMaxLength(500);
+
+            b.HasIndex(x => x.ApplicationId);
+            b.HasIndex(x => x.CustomerId);
+            b.HasIndex(x => x.Status);
+
+            b.HasQueryFilter(x => !x.IsDeleted);
+
+            b.HasOne<BankingApplication>()
+                .WithMany()
+                .HasForeignKey(x => x.ApplicationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.CustomerId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            b.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.VerifiedByOfficerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        // Audit log immutability & client-generated Guid fix:
+        // ApplicationTimelines are append-only. If EF Core ChangeTracker infers 'Modified'
+        // due to client-generated Guid on a child navigation, redirect it to 'Added'.
+        foreach (var entry in ChangeTracker.Entries<ApplicationTimeline>())
+        {
+            if (entry.State == EntityState.Modified)
+            {
+                entry.State = EntityState.Added;
+            }
+        }
+
+        // Auto-populate UpdatedAtUtc for modified BaseEntity records
+        foreach (var entry in ChangeTracker.Entries<BaseEntity>())
+        {
+            if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAtUtc = DateTime.UtcNow;
+            }
+        }
+
+        return base.SaveChangesAsync(cancellationToken);
     }
 }

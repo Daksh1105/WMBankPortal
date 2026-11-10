@@ -116,4 +116,60 @@ This living document contains real technical viva questions, expected architectu
   * *Adding new relational columns to `BankingApplications` for every new product would create schema bloat, thousands of sparse NULL columns, and risky, frequent database schema migrations in production.*
   * *Instead, each `BankingProduct` stores a JSON form schema (`nvarchar(max)`) defining required input types, labels, dropdown options, and validation bounds. The frontend dynamically generates the user interface from this schema, and the submitted response is stored in `FormValuesJson` alongside core indexed financial columns like `RequestedAmount` and `Status`."*
 
+---
+
+## Phase 3 Viva Questions (KYC Ingestion Security & Private Blob Storage)
+
+### Q13: Why is inspecting file extensions insufficient for securing file uploads in a banking portal, and how does magic byte inspection protect the system?
+* **Candidate Answer:**
+  * *"A file extension (`.pdf`, `.png`) is merely a hint stored in the filename string; an attacker can easily craft an executable payload or shell script and rename it to `passport.pdf`.*
+  * *If an API trusts client-provided file extensions or the HTTP `Content-Type` header (which the client also controls), malicious files can be uploaded and later executed by automated processors or downstream users.*
+  * *In our architecture, we implement strict **Magic Bytes binary inspection** via `KycFileValidator`:*
+    1. *We inspect the first 4 to 8 bytes directly from the binary stream.*
+    2. *For PDFs, we verify the presence of `%PDF` (`0x25, 0x50, 0x44, 0x46`).*
+    3. *For JPEGs, we verify the SOI marker `0xFF, 0xD8, 0xFF`.*
+    4. *For PNGs, we verify `0x89, 0x50, 0x4E, 0x47`.*
+  * *If the magic bytes do not match the expected binary signature, the upload is rejected immediately with a validation error, preventing file spoofing attacks."*
+
+---
+
+### Q14: How does your architecture protect customer KYC documents stored in blob storage, and why do you use 5-minute SAS tokens instead of direct blob URLs or API streaming?
+* **Candidate Answer:**
+  * *"Customer KYC documents contain sensitive PII (passports, national IDs, utility bills). Exposing them publicly or relying on 'unguessable' public URLs violates GDPR and banking privacy regulations.*
+  * *We protect documents using a three-tier storage model:*
+    1. *The blob container `kyc-documents` is strictly **private** with all anonymous public access disabled.*
+    2. *Instead of having the Web API stream megabytes of file binaries (which would saturate API thread pools and memory), the backend acts as a security gatekeeper: it verifies authentication, role, and IDOR ownership.*
+    3. *Once verified, it generates a time-limited **Shared Access Signature (SAS) URL** with **Read-only** access valid for only **5 minutes** (`DateTimeOffset.UtcNow.AddMinutes(5)`).*
+  * *The browser fetches the binary directly from Azure Blob Storage/Azurite via the SAS token, offloading bandwidth from API servers while ensuring the document cannot be accessed once the 5-minute window expires."*
+
+---
+
+### Q15: What is a double-extension attack, and how does your validator protect against it?
+* **Candidate Answer:**
+  * *"In a double-extension attack, an attacker names a file `passport.pdf.exe` or `id.png.php`. On misconfigured web servers or vulnerable parsers that check extensions using `string.Contains(".pdf")` or only look at the first extension delimiter, the file is accepted as a PDF but executed by the OS or web server as an executable or script.*
+  * *In our `KycFileValidator`:*
+    1. *We split the filename by dots (`fileName.Split('.')`).*
+    2. *If there are more than two segments (meaning multiple extensions exist), we reject the upload upfront with `Kyc.DoubleExtensionBlocked` before any other validation occurs.*
+    3. *Only single-extension files that match our explicit whitelist (`.pdf`, `.jpg`, `.jpeg`, `.png`) are permitted to proceed."*
+
+---
+
+### Q16: How do you handle document versioning and underwriting workflow when an officer rejects a customer's KYC proof?
+* **Candidate Answer:**
+  * *"When an underwriting officer reviews an application and rejects an invalid or blurred document (e.g. illegible address proof), the officer triggers `RequestKyc`, moving the application into `KycPending` state with mandatory remarks.*
+  * *When the customer uploads a replacement document:*
+    1. *`KycService` queries existing active documents for that application and type, increments the `Version` number (e.g., from v1 to v2), and marks the old document as replaced (`MarkReplaced(newDoc.Id)`).*
+    2. *The system automatically triggers `application.ResubmitKyc()`, advancing the application state from `KycPending` back to `UnderReview`.*
+    3. *An immutable `ApplicationTimeline` entry is logged recording the re-upload event and the customer ID, seamlessly returning the application to the underwriting queue without manual officer intervention."*
+
+---
+
+### Q17: In EF Core, why can adding child entities with client-generated GUIDs to an already-tracked entity cause a `DbUpdateConcurrencyException`, and how is it resolved?
+* **Candidate Answer:**
+  * *"In EF Core, the ChangeTracker determines whether an untracked child entity reached via a navigation property is `Added` or `Modified` by checking its primary key (`entry.IsKeySet`).*
+  * *If the entity inherits from a base class where `Id = Guid.NewGuid()` is generated on construction in C#, the key is already populated (`Id != Guid.Empty`). When the parent entity is already tracked as `Unchanged` or `Modified` and its child navigation collection was not loaded, EF Core assumes the child is an existing entity that was updated, marking its state as `EntityState.Modified`.*
+  * *During `SaveChangesAsync()`, EF Core sends an `UPDATE` command for the child entity. Since the child was newly instantiated and never existed in the database, the `UPDATE` affects 0 rows, causing EF Core to throw a `DbUpdateConcurrencyException`.*
+  * *We solved this cleanly in `AppDbContext.SaveChangesAsync()` by inspecting all `ApplicationTimeline` entries: since audit timelines are strictly append-only ledgers and never modified in banking, any entry in state `Modified` is redirected to `EntityState.Added`. This turns the command into an `INSERT` and ensures seamless persistence across state machine transitions."*
+
+
 

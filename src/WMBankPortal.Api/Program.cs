@@ -15,9 +15,11 @@ using WMBankPortal.Application.Features.Auth.Validators;
 using WMBankPortal.Application.Features.Profile.Services;
 using WMBankPortal.Application.Features.Products.Services;
 using WMBankPortal.Application.Features.Applications.Services;
+using WMBankPortal.Application.Features.Kyc.Services;
 using WMBankPortal.Infrastructure.Common;
 using WMBankPortal.Infrastructure.Identity;
 using WMBankPortal.Infrastructure.Persistence;
+using WMBankPortal.Infrastructure.Storage;
 
 // 1. Initialize bootstrap Serilog logger
 Log.Logger = new LoggerConfiguration()
@@ -127,6 +129,9 @@ try
     builder.Services.AddScoped<IProfileService, ProfileService>();
     builder.Services.AddScoped<IProductService, ProductService>();
     builder.Services.AddScoped<IApplicationService, ApplicationService>();
+    builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
+    builder.Services.AddSingleton<IMalwareScanner, NoOpMalwareScanner>();
+    builder.Services.AddScoped<IKycService, KycService>();
 
     // Register FluentValidation Validators
     builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>();
