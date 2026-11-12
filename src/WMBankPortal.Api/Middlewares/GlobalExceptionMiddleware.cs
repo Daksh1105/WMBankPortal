@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using WMBankPortal.Application.Common.Exceptions;
 using WMBankPortal.Domain.Exceptions;
+using Microsoft.EntityFrameworkCore;
 
 namespace WMBankPortal.Api.Middlewares;
 
@@ -104,6 +105,15 @@ public sealed class GlobalExceptionMiddleware
                     }
                 }),
 
+            DbUpdateConcurrencyException => (
+            HttpStatusCode.Conflict,
+            new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Concurrency Conflict",
+                Detail = "This record was changed by someone else. Reload and try again."
+            }),
+            
             _ => (
                 HttpStatusCode.InternalServerError,
                 new ProblemDetails

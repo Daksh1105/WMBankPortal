@@ -33,7 +33,10 @@ public static class DatabaseSeeder
         }
 
         // 2. Default demo password (can be overridden via user-secrets: DemoUsers:Password)
-        var demoPassword = configuration["DemoUsers:Password"] ?? "BankDemo123!Secure#";
+        var demoPassword = configuration["DemoUsers:Password"];
+        var seedUsers = !string.IsNullOrWhiteSpace(demoPassword);
+        if (!seedUsers)
+            logger.LogWarning("DemoUsers:Password is not set; skipping demo user seeding.");
 
         // 3. Demo Users Map
         var demoUsers = new (string Email, string Role)[]
@@ -46,7 +49,7 @@ public static class DatabaseSeeder
 
         ApplicationUser? demoCustomerUser = null;
 
-        foreach (var (email, role) in demoUsers)
+        foreach (var (email, role) in seedUsers ? demoUsers : Array.Empty<(string Email, string Role)>())
         {
             var user = await userManager.FindByEmailAsync(email);
             if (user == null)
@@ -59,7 +62,7 @@ public static class DatabaseSeeder
                     CreatedAtUtc = DateTime.UtcNow
                 };
 
-                var result = await userManager.CreateAsync(user, demoPassword);
+                var result = await userManager.CreateAsync(user, demoPassword!);
                 if (result.Succeeded)
                 {
                     await userManager.AddToRoleAsync(user, role);

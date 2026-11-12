@@ -2,20 +2,29 @@ using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using WMBankPortal.Application.Common.Interfaces;
 using WMBankPortal.Application.Features.Applications.DTOs;
+using WMBankPortal.Application.Features.Notifications.Services;
 using WMBankPortal.Domain.Common;
 using WMBankPortal.Domain.Entities;
 using WMBankPortal.Domain.Enums;
 using WMBankPortal.Domain.Exceptions;
+using WMBankPortal.Application.Features.Applications.Validators;
 
 namespace WMBankPortal.Application.Features.Applications.Services;
 
 public class ApplicationService : IApplicationService
 {
     private readonly IAppDbContext _context;
+    private readonly INotificationService _notificationService;
+    private readonly IAuditService _audit;
 
-    public ApplicationService(IAppDbContext context)
+    public ApplicationService(
+        IAppDbContext context,
+        INotificationService notificationService,
+        IAuditService audit)
     {
         _context = context;
+        _notificationService = notificationService;
+        _audit = audit;
     }
 
     public async Task<Result<BankingApplicationDto>> SubmitApplicationAsync(
@@ -40,6 +49,12 @@ public class ApplicationService : IApplicationService
                     $"Requested amount of {request.RequestedAmount:N2} must be between {product.MinAmount:N2} and {product.MaxAmount:N2} for {product.Name}."));
         }
 
+        var formError = DynamicFormValidator.Validate(product.DynamicFormSchemaJson, request.FormValuesJson);
+        if (formError != null)
+        {
+            return Result<BankingApplicationDto>.Failure(Error.Validation("Application.InvalidForm", formError));
+        }
+
         // Retry loop for unique constraint on ApplicationNumber
         for (int attempt = 0; attempt < 3; attempt++)
         {
@@ -58,6 +73,16 @@ public class ApplicationService : IApplicationService
             try
             {
                 await _context.SaveChangesAsync(ct);
+
+                // Dispatch notification
+                await _notificationService.CreateAndSendAsync(
+                    customerId,
+                    "Application Submitted",
+                    $"Your application {application.ApplicationNumber} has been received and is queued for underwriting review.",
+                    NotificationType.Success,
+                    application.Id,
+                    ct);
+
                 return Result<BankingApplicationDto>.Success(MapToDto(application, product));
             }
             catch (DbUpdateException) when (attempt < 2)
@@ -194,7 +219,21 @@ public class ApplicationService : IApplicationService
         try
         {
             app.Withdraw(customerId, request.Remarks);
+            _audit.Record(
+                "ApplicationWithdrawn",
+                nameof(BankingApplication),
+                app.Id.ToString(),
+                new { applicationId = app.Id });
             await _context.SaveChangesAsync(ct);
+
+            await _notificationService.CreateAndSendAsync(
+                customerId,
+                "Application Withdrawn",
+                $"Your application {app.ApplicationNumber} has been successfully withdrawn.",
+                NotificationType.Warning,
+                app.Id,
+                ct);
+
             return Result.Success();
         }
         catch (DomainException ex)

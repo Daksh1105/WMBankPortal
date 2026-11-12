@@ -7,6 +7,13 @@ using WMBankPortal.Domain.Enums;
 
 namespace WMBankPortal.Api.Controllers;
 
+public class UploadDocumentRequest
+{
+    public IFormFile File { get; set; } = null!;
+    public Guid ApplicationId { get; set; }
+    public string DocumentType { get; set; } = string.Empty;
+}
+
 [Authorize]
 [Route("api/v1/[controller]")]
 public class KycController : ApiControllerBase
@@ -19,39 +26,38 @@ public class KycController : ApiControllerBase
     }
 
     [HttpPost("upload")]
+    [Authorize(Roles = "Customer")]
     [Consumes("multipart/form-data")]
     [ProducesResponseType(typeof(KycDocumentDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<ActionResult> UploadDocument(
-        [FromForm] IFormFile file,
-        [FromForm] Guid applicationId,
-        [FromForm] string documentType,
+        [FromForm] UploadDocumentRequest request,
         CancellationToken ct)
     {
-        if (file == null || file.Length == 0)
+        if (request.File == null || request.File.Length == 0)
         {
             return HandleResult(Result<KycDocumentDto>.Failure(
                 Error.Validation("Kyc.FileMissing", "A file must be selected for upload.")));
         }
 
-        if (!Enum.TryParse<KycDocumentType>(documentType, true, out var parsedType))
+        if (!Enum.TryParse<KycDocumentType>(request.DocumentType, true, out var parsedType))
         {
             return HandleResult(Result<KycDocumentDto>.Failure(
                 Error.Validation("Kyc.InvalidType",
-                    $"Invalid document type '{documentType}'. Valid types: {string.Join(", ", Enum.GetNames<KycDocumentType>())}")));
+                    $"Invalid document type '{request.DocumentType}'. Valid types: {string.Join(", ", Enum.GetNames<KycDocumentType>())}")));
         }
 
         var customerId = GetCurrentUserId();
 
-        using var stream = file.OpenReadStream();
+        using var stream = request.File.OpenReadStream();
         var result = await _kycService.UploadDocumentAsync(
             customerId,
-            applicationId,
+            request.ApplicationId,
             parsedType,
-            file.FileName,
-            file.ContentType,
+            request.File.FileName,
+            request.File.ContentType,
             stream,
             ct);
 
@@ -59,6 +65,7 @@ public class KycController : ApiControllerBase
     }
 
     [HttpGet("application/{applicationId:guid}")]
+    [Authorize(Roles = "Customer,Officer,Admin")]
     [ProducesResponseType(typeof(IReadOnlyList<KycDocumentDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -77,6 +84,7 @@ public class KycController : ApiControllerBase
     }
 
     [HttpGet("{id:guid}/download-token")]
+    [Authorize(Roles = "Customer,Officer,Admin")]
     [ProducesResponseType(typeof(KycDownloadTokenDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]

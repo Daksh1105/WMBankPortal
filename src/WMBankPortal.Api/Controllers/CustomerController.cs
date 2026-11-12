@@ -5,7 +5,7 @@ using WMBankPortal.Application.Features.Applications.Services;
 
 namespace WMBankPortal.Api.Controllers;
 
-[Authorize]
+[Authorize(Roles = "Customer")]
 [Route("api/v1/[controller]")]
 public class CustomerController : ApiControllerBase
 {

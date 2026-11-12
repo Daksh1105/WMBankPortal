@@ -19,6 +19,9 @@ public class Phase3IntegrationTests : IClassFixture<WebApplicationFactory<Progra
 {
     private readonly WebApplicationFactory<Program> _factory;
 
+    private const string ValidSavingsFormJson =
+        "{\"initialDeposit\": 25000, \"sourceOfFunds\": \"Salary\", \"debitCardTier\": \"Platinum Visa\", \"nomineeName\": \"Pooja Gupta\", \"nomineeRelationship\": \"Spouse\"}";
+
     public Phase3IntegrationTests(WebApplicationFactory<Program> factory)
     {
         _factory = factory;
@@ -61,12 +64,13 @@ public class Phase3IntegrationTests : IClassFixture<WebApplicationFactory<Progra
         var productsRes = await client.GetAsync("/api/v1/products");
         var products = await productsRes.Content.ReadFromJsonAsync<List<BankingProductDto>>();
         Assert.NotNull(products);
-        var product = products.First();
+        var product = products.First(p => p.Code == "SAV-01");
 
         var appRes = await client.PostAsJsonAsync("/api/v1/applications", new SubmitApplicationRequest(
             product.Id,
-            product.MinAmount,
-            "{\"testField\": \"value\"}"));
+            25000m,
+            ValidSavingsFormJson));
+        Assert.Equal(HttpStatusCode.OK, appRes.StatusCode);
         var app = await appRes.Content.ReadFromJsonAsync<BankingApplicationDto>();
         Assert.NotNull(app);
 
@@ -78,6 +82,12 @@ public class Phase3IntegrationTests : IClassFixture<WebApplicationFactory<Progra
 
         var uploadRes = await client.PostAsync("/api/v1/kyc/upload", form);
         Assert.Equal(HttpStatusCode.OK, uploadRes.StatusCode);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WMBankPortal.Infrastructure.Persistence.AppDbContext>();
+            Assert.True(await db.AuditLogs.AnyAsync(a => a.Action == "KycDocumentUploaded"));
+        }
 
         var docDto = await uploadRes.Content.ReadFromJsonAsync<KycDocumentDto>();
         Assert.NotNull(docDto);
@@ -112,11 +122,13 @@ public class Phase3IntegrationTests : IClassFixture<WebApplicationFactory<Progra
         var productsRes = await client.GetAsync("/api/v1/products");
         var products = await productsRes.Content.ReadFromJsonAsync<List<BankingProductDto>>();
         Assert.NotNull(products);
+        var product = products.First(p => p.Code == "SAV-01");
 
         var appRes = await client.PostAsJsonAsync("/api/v1/applications", new SubmitApplicationRequest(
-            products.First().Id,
-            products.First().MinAmount,
-            "{}"));
+            product.Id,
+            25000m,
+            ValidSavingsFormJson));
+        Assert.Equal(HttpStatusCode.OK, appRes.StatusCode);
         var app = await appRes.Content.ReadFromJsonAsync<BankingApplicationDto>();
         Assert.NotNull(app);
 
@@ -166,11 +178,13 @@ public class Phase3IntegrationTests : IClassFixture<WebApplicationFactory<Progra
         var productsRes = await clientA.GetAsync("/api/v1/products");
         var products = await productsRes.Content.ReadFromJsonAsync<List<BankingProductDto>>();
         Assert.NotNull(products);
+        var product = products.First(p => p.Code == "SAV-01");
 
         var appRes = await clientA.PostAsJsonAsync("/api/v1/applications", new SubmitApplicationRequest(
-            products.First().Id,
-            products.First().MinAmount,
-            "{}"));
+            product.Id,
+            25000m,
+            ValidSavingsFormJson));
+        Assert.Equal(HttpStatusCode.OK, appRes.StatusCode);
         var appA = await appRes.Content.ReadFromJsonAsync<BankingApplicationDto>();
         Assert.NotNull(appA);
 

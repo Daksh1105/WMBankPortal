@@ -51,7 +51,14 @@ public sealed class AuthController : ApiControllerBase
         }
 
         var result = await _authService.RegisterAsync(request, cancellationToken);
-        return HandleResult(result);
+        if (result.IsFailure) return HandleResult(result);
+
+        var login = await _authService.LoginAsync(
+            new LoginRequest(request.Email, request.Password), _currentUserService.IpAddress, cancellationToken);
+        if (login.IsFailure) return HandleResult(login);
+
+        SetRefreshTokenCookie(login.Value.RefreshToken);
+        return Ok(login.Value.Response);
     }
 
     /// <summary>
@@ -92,6 +99,9 @@ public sealed class AuthController : ApiControllerBase
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> RefreshToken(CancellationToken cancellationToken)
     {
+        if (!HasCsrfHeader())
+            return BadRequest(new ProblemDetails { Status = 400, Title = "Missing required header." });
+
         var rawRefreshToken = Request.Cookies[RefreshTokenCookieName];
         if (string.IsNullOrWhiteSpace(rawRefreshToken))
         {
@@ -126,6 +136,9 @@ public sealed class AuthController : ApiControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Logout(CancellationToken cancellationToken)
     {
+        if (!HasCsrfHeader())
+            return BadRequest(new ProblemDetails { Status = 400, Title = "Missing required header." });
+
         var rawRefreshToken = Request.Cookies[RefreshTokenCookieName];
         if (!string.IsNullOrWhiteSpace(rawRefreshToken))
         {
@@ -163,6 +176,9 @@ public sealed class AuthController : ApiControllerBase
         var result = await _authService.ChangePasswordAsync(_currentUserService.UserId.Value, request, cancellationToken);
         return HandleResult(result);
     }
+
+    private bool HasCsrfHeader() =>
+        string.Equals(Request.Headers["X-Requested-With"], "XMLHttpRequest", StringComparison.Ordinal);
 
     private void SetRefreshTokenCookie(string refreshToken)
     {

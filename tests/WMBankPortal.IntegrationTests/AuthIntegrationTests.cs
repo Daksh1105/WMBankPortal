@@ -13,11 +13,16 @@ public class AuthIntegrationTests : IClassFixture<WebApplicationFactory<Program>
 
     public AuthIntegrationTests(WebApplicationFactory<Program> factory)
     {
-        _client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        _client = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("RateLimiting:AuthPermitLimit", "1000");
+            builder.UseSetting("RateLimiting:GlobalPermitLimit", "1000");
+        }).CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost"),
             HandleCookies = true // Automatically tracks HttpOnly cookies
         });
+        _client.DefaultRequestHeaders.Add("X-Requested-With", "XMLHttpRequest");
     }
 
     [Fact]
@@ -84,8 +89,10 @@ public class AuthIntegrationTests : IClassFixture<WebApplicationFactory<Program>
 
         // Assert
         Assert.Equal(HttpStatusCode.Unauthorized, attemptAfterLockout.StatusCode);
-        var responseContent = await attemptAfterLockout.Content.ReadAsStringAsync();
-        Assert.Contains("Account is locked", responseContent);
+        var responseContent = await attemptAfterLockout.Content.ReadFromJsonAsync<object>();
+        Assert.NotNull(responseContent);
+        var rawContent = await attemptAfterLockout.Content.ReadAsStringAsync();
+        Assert.Contains("Account is locked", rawContent);
     }
 
     [Fact]

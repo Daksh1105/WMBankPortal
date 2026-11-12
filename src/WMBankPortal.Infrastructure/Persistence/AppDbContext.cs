@@ -24,6 +24,8 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, Applicatio
     public DbSet<BankingApplication> BankingApplications => Set<BankingApplication>();
     public DbSet<ApplicationTimeline> ApplicationTimelines => Set<ApplicationTimeline>();
     public DbSet<KycDocument> KycDocuments => Set<KycDocument>();
+    public DbSet<UserNotification> UserNotifications => Set<UserNotification>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -190,18 +192,70 @@ public sealed class AppDbContext : IdentityDbContext<ApplicationUser, Applicatio
                 .HasForeignKey(x => x.VerifiedByOfficerId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
+        // Configure UserNotification entity
+        builder.Entity<UserNotification>(b =>
+        {
+            b.ToTable("UserNotifications");
+            b.HasKey(x => x.Id);
+
+            b.Property(x => x.Title).HasMaxLength(200).IsRequired();
+            b.Property(x => x.Message).HasMaxLength(1000).IsRequired();
+            b.Property(x => x.Type).HasConversion<string>().HasMaxLength(32).IsRequired();
+            b.Property(x => x.IsRead).IsRequired();
+
+            b.HasIndex(x => x.UserId);
+            b.HasIndex(x => x.CreatedAtUtc);
+            b.HasIndex(x => new { x.UserId, x.IsRead });
+
+            b.HasOne<ApplicationUser>()
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            b.HasOne<BankingApplication>()
+                .WithMany()
+                .HasForeignKey(x => x.ApplicationId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // Configure AuditLog entity (append-only, no FK to users on purpose)
+        builder.Entity<AuditLog>(b =>
+        {
+            b.ToTable("AuditLogs");
+            b.HasKey(x => x.Id);
+            b.Property(x => x.Id).ValueGeneratedNever();
+
+            b.Property(x => x.UserRole).HasMaxLength(64);
+            b.Property(x => x.Action).HasMaxLength(100).IsRequired();
+            b.Property(x => x.EntityName).HasMaxLength(100).IsRequired();
+            b.Property(x => x.EntityId).HasMaxLength(64);
+            b.Property(x => x.DetailsJson).HasColumnType("nvarchar(max)");
+            b.Property(x => x.IpAddress).HasMaxLength(64);
+            b.Property(x => x.UserAgent).HasMaxLength(256);
+            b.Property(x => x.CorrelationId).HasMaxLength(64);
+
+            b.HasIndex(x => x.TimestampUtc);
+            b.HasIndex(x => x.UserId);
+            b.HasIndex(x => x.CorrelationId);
+            b.HasIndex(x => new { x.EntityName, x.EntityId });
+        });
+
+        foreach (var entityType in builder.Model.GetEntityTypes()
+                     .Where(t => typeof(BaseEntity).IsAssignableFrom(t.ClrType)))
+        {
+            builder.Entity(entityType.ClrType).Property(nameof(BaseEntity.Id)).ValueGeneratedNever();
+        }
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        // Audit log immutability & client-generated Guid fix:
-        // ApplicationTimelines are append-only. If EF Core ChangeTracker infers 'Modified'
-        // due to client-generated Guid on a child navigation, redirect it to 'Added'.
-        foreach (var entry in ChangeTracker.Entries<ApplicationTimeline>())
+        // Audit rows are append-only: block any attempt to edit or delete one.
+        foreach (var entry in ChangeTracker.Entries<AuditLog>())
         {
-            if (entry.State == EntityState.Modified)
+            if (entry.State is EntityState.Modified or EntityState.Deleted)
             {
-                entry.State = EntityState.Added;
+                throw new InvalidOperationException("AuditLog entries are append-only and cannot be modified or deleted.");
             }
         }
 

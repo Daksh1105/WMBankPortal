@@ -19,6 +19,7 @@ public sealed class AuthService : IAuthService
     private readonly AppDbContext _dbContext;
     private readonly JwtSettings _jwtSettings;
     private readonly ILogger<AuthService> _logger;
+    private readonly IAuditService _audit;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -26,7 +27,8 @@ public sealed class AuthService : IAuthService
         IJwtTokenService jwtTokenService,
         AppDbContext dbContext,
         IOptions<JwtSettings> jwtOptions,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        IAuditService audit)
     {
         _userManager = userManager;
         _roleManager = roleManager;
@@ -34,6 +36,7 @@ public sealed class AuthService : IAuthService
         _dbContext = dbContext;
         _jwtSettings = jwtOptions.Value;
         _logger = logger;
+        _audit = audit;
     }
 
     public async Task<Result<AuthResponse>> RegisterAsync(
@@ -96,6 +99,9 @@ public sealed class AuthService : IAuthService
         // Check if account is locked out
         if (await _userManager.IsLockedOutAsync(user))
         {
+            _audit.Record("LoginFailed", nameof(ApplicationUser), user.Id.ToString(), new { userId = user.Id, reason = "LOCKED_OUT" });
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            
             _logger.LogWarning("Login attempt for locked out account: {Email}", request.Email);
             return Result.Failure<(AuthResponse, string)>(
                 Error.Unauthorized("AUTH_ACCOUNT_LOCKED", "Account is locked due to multiple failed attempts. Please try again in 15 minutes."));
@@ -108,13 +114,25 @@ public sealed class AuthService : IAuthService
             await _userManager.AccessFailedAsync(user);
             if (await _userManager.IsLockedOutAsync(user))
             {
+                _audit.Record("AccountLockedOut", nameof(ApplicationUser), user.Id.ToString(), new { userId = user.Id });
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                
                 _logger.LogWarning("Account locked out after failed attempt: {Email}", request.Email);
                 return Result.Failure<(AuthResponse, string)>(
                     Error.Unauthorized("AUTH_ACCOUNT_LOCKED", "Account is locked due to multiple failed attempts. Please try again in 15 minutes."));
             }
 
+            _audit.Record("LoginFailed", nameof(ApplicationUser), user.Id.ToString(), new { userId = user.Id, reason = "INVALID_CREDENTIALS" });
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
             return Result.Failure<(AuthResponse, string)>(
                 Error.Unauthorized("AUTH_INVALID_CREDENTIALS", "Invalid email or password."));
+        }
+
+        if (user.IsDeactivated)
+        {
+            return Result.Failure<(AuthResponse, string)>(
+                Error.Unauthorized("AUTH_USER_DISABLED", "User account is no longer active."));
         }
 
         // Reset failed attempt counter upon successful login
@@ -166,18 +184,18 @@ public sealed class AuthService : IAuthService
 
         if (existingToken == null)
         {
-            _logger.LogWarning("Refresh token not found for hash: {Hash}", incomingHash);
+            _logger.LogWarning("Unrecognised refresh token presented from {Ip}", clientIp);
             return Result.Failure<RefreshTokenResult>(
                 Error.Unauthorized("AUTH_INVALID_REFRESH_TOKEN", "Invalid refresh token."));
         }
 
         // =========================================================================
         // REUSE DETECTION (Compromise Alert)
-        // If an already-revoked token is presented, an attacker has stolen and replayed
-        // an old token! Invalidate the ENTIRE token family immediately.
         // =========================================================================
         if (existingToken.IsRevoked)
         {
+            _audit.Record("RefreshTokenReuseDetected", nameof(RefreshToken), existingToken.Id.ToString(), new { familyId = existingToken.FamilyId });
+            
             _logger.LogCritical(
                 "SECURITY ALERT: Refresh token reuse detected for User {UserId}, Family {FamilyId}! Revoking all tokens in family.",
                 existingToken.UserId, existingToken.FamilyId);
@@ -286,6 +304,14 @@ public sealed class AuthService : IAuthService
             var firstError = result.Errors.FirstOrDefault()?.Description ?? "Failed to change password.";
             return Result.Failure(Error.Validation("AUTH_PASSWORD_CHANGE_FAILED", firstError));
         }
+
+        _audit.Record("PasswordChanged", nameof(ApplicationUser), userId.ToString(), new { });
+
+        var activeTokens = await _dbContext.RefreshTokens
+            .Where(t => t.UserId == userId && !t.RevokedAtUtc.HasValue)
+            .ToListAsync(cancellationToken);
+        foreach (var t in activeTokens) t.Revoke("Password changed");
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Password changed successfully for User {UserId}", userId);
         return Result.Success();

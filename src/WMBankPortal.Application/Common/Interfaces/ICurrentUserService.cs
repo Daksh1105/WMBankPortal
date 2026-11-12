@@ -11,4 +11,5 @@ public interface ICurrentUserService
     bool IsAuthenticated { get; }
     string? IpAddress { get; }
     string? UserAgent { get; }
+    string? CorrelationId { get; }
 }

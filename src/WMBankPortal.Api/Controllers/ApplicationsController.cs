@@ -23,6 +23,7 @@ public class ApplicationsController : ApiControllerBase
     }
 
     [HttpPost]
+    [Authorize(Roles = "Customer")]
     [ProducesResponseType(typeof(BankingApplicationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult> SubmitApplication(
@@ -43,6 +44,7 @@ public class ApplicationsController : ApiControllerBase
     }
 
     [HttpGet("my")]
+    [Authorize(Roles = "Customer")]
     [ProducesResponseType(typeof(PagedResult<BankingApplicationDto>), StatusCodes.Status200OK)]
     public async Task<ActionResult> GetMyApplications(
         [FromQuery] int pageNumber = 1,
@@ -55,6 +57,7 @@ public class ApplicationsController : ApiControllerBase
     }
 
     [HttpGet("{id:guid}")]
+    [Authorize(Roles = "Customer,Officer,Admin")]
     [ProducesResponseType(typeof(BankingApplicationDto), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -67,6 +70,7 @@ public class ApplicationsController : ApiControllerBase
     }
 
     [HttpGet("{id:guid}/timeline")]
+    [Authorize(Roles = "Customer,Officer,Admin")]
     [ProducesResponseType(typeof(IReadOnlyList<ApplicationTimelineDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
@@ -79,6 +83,7 @@ public class ApplicationsController : ApiControllerBase
     }
 
     [HttpPost("{id:guid}/withdraw")]
+    [Authorize(Roles = "Customer")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]

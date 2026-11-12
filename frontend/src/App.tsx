@@ -19,6 +19,7 @@ import { RegisterPage } from './pages/auth/RegisterPage'
 import { CustomerDashboardPage } from './pages/customer/CustomerDashboardPage'
 import { ProductCatalogPage } from './pages/customer/ProductCatalogPage'
 import { ProfilePage } from './pages/customer/ProfilePage'
+import { NotificationBell } from './components/notifications/NotificationBell'
 import { apiClient } from './api/client'
 
 type ActiveTab = 'dashboard' | 'products' | 'profile' | 'security'
@@ -100,6 +101,8 @@ function MainContent() {
               <span className="text-xs font-semibold text-slate-900">{user?.email}</span>
               <span className="text-[10px] text-slate-400 font-mono">ID: {user?.id.slice(0, 8)}...</span>
             </div>
+
+            <NotificationBell onNavigateToApplication={() => setActiveTab('dashboard')} />
 
             <span
               className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${

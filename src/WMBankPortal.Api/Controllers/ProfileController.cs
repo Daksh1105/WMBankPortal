@@ -7,7 +7,7 @@ using WMBankPortal.Domain.Common;
 
 namespace WMBankPortal.Api.Controllers;
 
-[Authorize]
+[Authorize(Roles = "Customer")]
 [Route("api/v1/[controller]")]
 public class ProfileController : ApiControllerBase
 {

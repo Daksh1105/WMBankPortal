@@ -9,6 +9,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Serilog;
 using WMBankPortal.Api.Middlewares;
+using WMBankPortal.Api.Hubs;
 using WMBankPortal.Api.Services;
 using WMBankPortal.Application.Common.Interfaces;
 using WMBankPortal.Application.Features.Auth.Validators;
@@ -16,10 +17,14 @@ using WMBankPortal.Application.Features.Profile.Services;
 using WMBankPortal.Application.Features.Products.Services;
 using WMBankPortal.Application.Features.Applications.Services;
 using WMBankPortal.Application.Features.Kyc.Services;
+using WMBankPortal.Application.Features.Notifications.Services;
 using WMBankPortal.Infrastructure.Common;
 using WMBankPortal.Infrastructure.Identity;
+using WMBankPortal.Infrastructure.Notifications;
 using WMBankPortal.Infrastructure.Persistence;
 using WMBankPortal.Infrastructure.Storage;
+using Microsoft.AspNetCore.HttpOverrides;
+using WMBankPortal.Application.Features.Underwriting.Services;
 
 // 1. Initialize bootstrap Serilog logger
 Log.Logger = new LoggerConfiguration()
@@ -76,6 +81,10 @@ try
     var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>()
         ?? throw new InvalidOperationException("JwtSettings section is missing from configuration.");
 
+    if (string.IsNullOrWhiteSpace(jwtSettings.Secret) || jwtSettings.Secret.Length < 32)
+        throw new InvalidOperationException(
+            "JwtSettings:Secret is missing or shorter than 32 characters. Set it with dotnet user-secrets.");
+    
     var tokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
@@ -122,6 +131,10 @@ try
     builder.Services.AddEndpointsApiExplorer();
     builder.Services.AddHttpContextAccessor();
 
+    // Forwarded headers config
+    builder.Services.Configure<ForwardedHeadersOptions>(o =>
+        o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto);
+
     builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
     builder.Services.AddSingleton<IDateTimeProvider, DateTimeProvider>();
     builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
@@ -129,9 +142,17 @@ try
     builder.Services.AddScoped<IProfileService, ProfileService>();
     builder.Services.AddScoped<IProductService, ProductService>();
     builder.Services.AddScoped<IApplicationService, ApplicationService>();
+    builder.Services.AddScoped<IOfficerService, OfficerService>();
     builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
     builder.Services.AddSingleton<IMalwareScanner, NoOpMalwareScanner>();
     builder.Services.AddScoped<IKycService, KycService>();
+    builder.Services.AddSingleton<IEmailService, MockEmailService>();
+    builder.Services.AddScoped<IRealTimeNotificationPublisher, SignalRNotificationPublisher>();
+    builder.Services.AddScoped<INotificationService, NotificationService>();
+    builder.Services.AddScoped<IAuditService, WMBankPortal.Infrastructure.Auditing.AuditService>();
+
+    // Register SignalR for real-time WebSocket notifications
+    builder.Services.AddSignalR();
 
     // Register FluentValidation Validators
     builder.Services.AddValidatorsFromAssemblyContaining<RegisterRequestValidator>();
@@ -173,22 +194,30 @@ try
     {
         options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-        // General sliding window rate limiter
-        options.AddSlidingWindowLimiter("api-limiter", opt =>
-        {
-            opt.PermitLimit = 100;
-            opt.Window = TimeSpan.FromMinutes(1);
-            opt.SegmentsPerWindow = 6;
-            opt.QueueLimit = 0;
-        });
+        static string ClientKey(HttpContext ctx) =>
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
-        // Strict fixed window limiter for sensitive auth endpoints (prevent brute-force)
-        options.AddFixedWindowLimiter("auth-limiter", opt =>
-        {
-            opt.PermitLimit = 10;
-            opt.Window = TimeSpan.FromMinutes(1);
-            opt.QueueLimit = 0;
-        });
+        var authLimit = builder.Configuration.GetValue("RateLimiting:AuthPermitLimit", 10);
+        var apiLimit = builder.Configuration.GetValue("RateLimiting:ApiPermitLimit", 100);
+
+        // Applies to every request, per client IP
+        options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+            RateLimitPartition.GetSlidingWindowLimiter(ClientKey(ctx), _ => new SlidingWindowRateLimiterOptions
+            {
+                PermitLimit = apiLimit,
+                Window = TimeSpan.FromMinutes(1),
+                SegmentsPerWindow = 6,
+                QueueLimit = 0
+            }));
+
+        // Extra strict limit for auth endpoints, per client IP
+        options.AddPolicy("auth-limiter", ctx =>
+            RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = authLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
     });
 
     var app = builder.Build();
@@ -197,36 +226,22 @@ try
     // STRICT MIDDLEWARE PIPELINE ORDER (Per Enterprise Banking Architecture)
     // =========================================================================
 
-    // 1. Global Exception Handler (RFC 7807 ProblemDetails)
+    app.UseForwardedHeaders();
+    app.UseMiddleware<CorrelationIdMiddleware>();
     app.UseMiddleware<GlobalExceptionMiddleware>();
 
-    // 2. HTTPS Redirection & HSTS in non-development
     if (!app.Environment.IsDevelopment())
     {
         app.UseHsts();
         app.UseHttpsRedirection();
     }
 
-    // 3. Security Headers (CSP, X-Frame-Options, X-Content-Type-Options)
     app.UseMiddleware<SecurityHeadersMiddleware>();
-
-    // 4. CORS Policy
-    app.UseCors("DefaultCorsPolicy");
-
-    // 5. Rate Limiter
-    app.UseRateLimiter();
-
-    // 6. Routing
     app.UseRouting();
-
-    // 7. Authentication (Validates JWT Token from Authorization header or WebSocket query)
+    app.UseCors("DefaultCorsPolicy");
+    app.UseRateLimiter();       // must come after UseRouting so endpoint attributes work
     app.UseAuthentication();
-
-    // 8. Authorization (Enforces RBAC policies)
     app.UseAuthorization();
-
-    // 9. Correlation ID and Request Tracing Middleware
-    app.UseMiddleware<CorrelationIdMiddleware>();
 
     // 10. Swagger UI (strictly Development only)
     if (app.Environment.IsDevelopment())
@@ -240,7 +255,8 @@ try
     }
 
     // 11. Endpoint mappings
-    app.MapControllers().RequireRateLimiting("api-limiter");
+    app.MapControllers();
+    app.MapHub<NotificationHub>("/hubs/notifications");
     app.MapHealthChecks("/health");
 
     // Root redirect to Swagger UI in Development for instant developer feedback

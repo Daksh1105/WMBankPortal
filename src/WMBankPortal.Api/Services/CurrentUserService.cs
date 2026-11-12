@@ -37,10 +37,11 @@ public sealed class CurrentUserService : ICurrentUserService
     public bool IsAuthenticated =>
         HttpContext?.User.Identity?.IsAuthenticated ?? false;
 
-    public string? IpAddress =>
-        HttpContext?.Connection.RemoteIpAddress?.ToString()
-        ?? HttpContext?.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+    public string? IpAddress => HttpContext?.Connection.RemoteIpAddress?.ToString();
 
     public string? UserAgent =>
         HttpContext?.Request.Headers.UserAgent.ToString();
+
+    public string? CorrelationId =>
+    HttpContext?.Items["X-Correlation-ID"] as string;
 }
